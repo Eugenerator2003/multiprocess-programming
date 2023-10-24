@@ -1,26 +1,29 @@
 #pragma once
 #include <string>
 #include <random>
+#include "LinearSystemContext.h"
 constexpr auto MAX_VAL = 200;;
 
-double* zeros(int n);
+// вывод матрицы
+void print(LinearSystemContext &context);
 
-double** zeros(int n, int m);
+// чтение массива из файла
+void readarr(std::string name, LinearSystemContext* context);
 
-double** copy(double** src, int n, int m);
+// чтение матрицы из файла
+LinearSystemContext* readmatrix(std::string name);
 
-void print(double** matrx, int n, int m);
+// запись матрицы в файл
+void writematrix(std::string name, LinearSystemContext* context);
 
-double* readarr(std::string name, int* n);
+// запись массива в файл
+void writearr(std::string name, LinearSystemContext* context, bool result = false);
 
-double** readmatrix(std::string name, int* n, int* m);
+// генерация массива
+void genarray(LinearSystemContext* context, int maxvalue, std::mt19937* mersenne = nullptr);
 
-void writematrix(std::string name, double** matr, int n, int m);
+// генерация матрицы
+LinearSystemContext genmatrix(int maxvalue, std::mt19937* mersenne = nullptr);
 
-void writearr(std::string name, double* arr, int n);
-
-double* genarray(int n = NULL, int maxvalue = MAX_VAL, std::mt19937* random = nullptr);
-
-double** genmatrix(int &n, int &m, int maxvalue = MAX_VAL, std::mt19937* random = nullptr);
-
+// генерация матриц и массивов с последующей записью в файл
 void genwritematrices(int count);

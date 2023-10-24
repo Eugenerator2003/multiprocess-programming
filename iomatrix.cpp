@@ -1,114 +1,81 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <random>
 #include <cstdlib>
 #include <filesystem>
 #include "iomatrix.h"
 
-double* zeros(int n) {
-	double* arr = new double[n];
+void print(LinearSystemContext& context) {
+	int n = context.getElementsCount();
+	double** matr = context.getMatrix();
 	for (int i = 0; i < n; i++) {
-		arr[i] = 0;
-	}
-	return arr;
-}
-
-double** zeros(int n, int m)
-{
-	double** matrx = new double*[n];
-	for (int i = 0; i < n; i++) {
-		matrx[i] = zeros(m);
-	}
-	return matrx;
-}
-
-double** copy(double** src, int n, int m)
-{
-	double** dst = new double*[n];
-	for (int i = 0; i < n; i++) {
-		dst[i] = new double[m];
-		for(int j = 0; j < m; j++)
-		{
-			dst[i][j] = src[i][j];
-		}
-	}
-	return dst;
-}
-
-
-void print(double** matrx, int n, int m) {
-	for (int i = 0; i < n; i++) {
-		for (int j = 0; j < m; j++) {
-			std::cout << matrx[i][j] << " ";
+		for (int j = 0; j < n; j++) {
+			std::cout << matr[i][j] << " ";
 		}
 		std::cout << std::endl;
 	}
 	std::cout << "-------------" << std::endl;
 }
 
-double* readarr(std::string name, int* n)
+// чтение массива свободных членов из текстового файла в контекст СЛАУ
+void readarr(std::string name, LinearSystemContext* context)
 {
-	double* arr = nullptr;
 	std::ifstream in(name);
 	if (in.is_open()) {
 		std::string line;
 		std::getline(in, line);
-		*n = atoi(line.c_str());
+		int n = std::stod(line);
 
-		arr = new double[*n];
 		std::getline(in, line);
-
-		char* ptrline = const_cast<char*>(line.c_str());
-		char* next_token;
-		char* pos = strtok_s(ptrline, " ", &next_token);
-		arr[0] = atof(pos);
-		
-		int i = 1;
-		while (pos = strtok_s(NULL, " ", &next_token))
+		std::string word;
+		std::stringstream ss(line);
+		int i = 0;
+		while (ss >> word)
 		{
-			arr[i] = atof(pos);
+			context->setValue(i, std::stod(word));
 			i++;
 		}
 	}
-	return arr;
+	in.close();
 }
 
-double** readmatrix(std::string name, int* n, int *m)
+// чтение матрицы из файла с созданием контекста СЛАУ
+LinearSystemContext* readmatrix(std::string name)
 {
-	double** matr = nullptr;
+	LinearSystemContext* context = nullptr;
 	std::ifstream in(name);
 	if (in.is_open()) {
-		std::string line;
+		std::string line = "";
 		std::getline(in, line);
-		*n = atoi(const_cast<char*>(line.c_str()));
-		matr = new double* [*n];
-		for (int i = 0; i < *n; i++) {
+		int n = std::stod(line);
+		context = new LinearSystemContext(n);
+
+		for (int i = 0; i < n; i++) {
 			std::getline(in, line);
 
-			char* ptrline = const_cast<char*>(line.c_str());
-			char* next_token;
-			char* pos = strtok_s(ptrline, " ", &next_token);
-
-			matr[i] = new double[*n];
-			matr[i][0] = atof(pos);
-
-			int j = 1;
-			while (pos = strtok_s(NULL, " ", &next_token)) {
-				matr[i][j] = atof(pos);
+			std::string word;
+			std::stringstream ss(line);
+			int j = 0;
+			while (ss >> word) {
+				context->setMatrixValue(i, j, std::stod(word));
 				j++;
 			}
 		}
+		in.close();
 	}
-	in.close();
-	return matr;
+	return context;
 }
 
-void writematrix(std::string name, double** matr, int n, int m)
+// запись матрицы в текстовый файл
+void writematrix(std::string name, LinearSystemContext* context)
 {
+	int n = context->getElementsCount();
 	std::ofstream out(name, std::ios::out);
-	out << n << " " << m << std::endl;
+	out << n << " " << n << std::endl;
+	double** matr = context->getMatrix();
 	for (int i = 0; i < n; i++) {
-		for (int j = 0; j < m; j++) {
+		for (int j = 0; j < n; j++) {
 			out << matr[i][j] << " ";
 		}
 		out << std::endl;
@@ -116,7 +83,17 @@ void writematrix(std::string name, double** matr, int n, int m)
 	out.close();
 }
 
-void writearr(std::string name, double* arr, int n) {
+// запись свободных членов или решения СЛАУ в текстовый файл
+void writearr(std::string name, LinearSystemContext* context, bool result) {
+	int n = context->getElementsCount();
+	double* arr;
+	if (result) {
+		arr = context->getX();
+	}
+	else
+	{
+		arr = context->getValues();
+	}
 	std::ofstream out(name, std::ios::out);
 	out << n << std::endl;
 	for (int i = 0; i < n; i++) {
@@ -125,7 +102,8 @@ void writearr(std::string name, double* arr, int n) {
 	out.close();
 }
 
-double* genarray(int n, int maxvalue, std::mt19937* mersenne)
+// генерация свободных членов СЛАУ
+void genarray(LinearSystemContext* context, int maxvalue, std::mt19937* mersenne)
 {
 	bool created = false;
 	if (!mersenne) {
@@ -134,23 +112,19 @@ double* genarray(int n, int maxvalue, std::mt19937* mersenne)
 		created = true;
 	}
 
-	if (n == NULL) {
-		n = (*mersenne)() % (1 + 200);
-	}
+	int n = context->getElementsCount();
 
-	double* arr = new double[n];
 	for (int i = 0; i < n; i++) {
-		arr[i] = (*mersenne)() % (1 + maxvalue);
+		context->setValue(i, (*mersenne)() % (1 + maxvalue));
 	}
 
 	if (created) {
 		delete mersenne;
 	}
-
-	return arr;
 }
 
-double** genmatrix(int &n, int &m, int maxvalue, std::mt19937* mersenne)
+// генерация матрицы с созданием контекста СЛАУ
+LinearSystemContext genmatrix(int maxvalue, std::mt19937* mersenne)
 {
 	bool created = false;
 	if (!mersenne) {
@@ -159,23 +133,23 @@ double** genmatrix(int &n, int &m, int maxvalue, std::mt19937* mersenne)
 		created = true;
 	}
 
-	if (n == NULL && n == m) {
-		n = 100 * (*mersenne)() % (1 + 200);
-		m = n;
-	}
+	int n = 100 + (*mersenne)() % (50 + 200);
 
-	double** matr = new double*[n];
+	LinearSystemContext context = LinearSystemContext(n);
 	for (int i = 0; i < n; i++) {
-		matr[i] = genarray(m, MAX_VAL, mersenne);
+		for (int j = 0; j < n; j++) {
+			context.setMatrixValue(i, j, (*mersenne)() % (1 + maxvalue));
+		}
 	}
 
 	if (created) {
 		delete mersenne;
 	}
 
-	return matr;
+	return context;
 }
 
+// генерация СЛАУ и их запись в файл
 void genwritematrices(int count)
 {
 	if (!std::filesystem::exists("matrices")) {
@@ -188,12 +162,9 @@ void genwritematrices(int count)
 
 	int n = NULL, m = NULL;
 	for (int i = 0; i < count; i++) {
-		double** matr = genmatrix(n, m, MAX_VAL);
-		double* b = genarray(m);
-		writematrix("matrices/" + std::to_string(i) + ".txt", matr, n, m);
-		writearr("values/" + std::to_string(i) + ".txt", b, m);
-		delete matr, b;
-		n = NULL;
-		m = NULL;
+		LinearSystemContext context = genmatrix(MAX_VAL);
+		genarray(&context, MAX_VAL);
+		writematrix("matrices/" + std::to_string(i) + ".txt", &context);
+		writearr("values/" + std::to_string(i) + ".txt", &context);
 	}
 }

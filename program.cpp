@@ -3,64 +3,23 @@
 #include <filesystem>
 #include <string>
 #include <chrono>
-#include <thread>
-
+#include <Windows.h>
+#include "LinearSystemContext.h"
 #include "iomatrix.h"
 
-double** ld(double** A, int n) {
-    double** LD = copy(A, n, n);
+// структура для передачи параметра в поток
+struct ComputeParam {
+    // номер СЛАУ
+    int ordernum;
+    // указатель на массив выполнения
+    bool* finished;
+    // контекст системы линейных уравнений
+    LinearSystemContext* context;
+    // общее время
+    std::chrono::duration<double>* total;
+};
 
-    for (int j = 0; j < n; ++j) {
-
-        double* v = zeros(n + 1);
-
-        for (int i = 0; i < j; ++i) {
-            v[i] = LD[j][i] * LD[i][i];
-        }
-
-        double sum = 0.0;
-        for (int i = 0; i < j; ++i) {
-            sum += LD[j][i] * v[i];
-        }
-        v[j] = LD[j][j] - sum;
-        LD[j][j] = v[j];
-
-        for (int i = j + 1; i < n; ++i) {
-            double sub_sum = 0.0;
-            for (int k = 0; k < j; ++k) {
-                sub_sum += LD[i][k] * v[k];
-            }
-            LD[i][j] = (LD[i][j] - sub_sum) / v[j];
-        }
-    }
-
-    return LD;
-}
-
-double* ld_solve(double** A, int n, double* b) {
-    double** LD = ld(A, n);
-
-    for (int i = 1; i < n; ++i) {
-        for (int j = 0; j < i; ++j) {
-            b[i] -= LD[i][j] * b[j];
-        }
-    }
-
-    for (int i = 0; i < n; ++i) {
-        b[i] /= LD[i][i];
-    }
-
-    for (int i = n - 2; i >= 0; --i) {
-        for (int j = i + 1; j < n; ++j) {
-            b[i] -= LD[j][i] * b[j];
-        }
-    }
-
-    delete LD;
-
-    return b;
-}
-
+// реализация планировщика с алгоритмом fcfs
 double fcfs(int nmatrices) {
     if (!std::filesystem::exists("fcfs")) {
         std::filesystem::create_directory("fcfs");
@@ -70,59 +29,108 @@ double fcfs(int nmatrices) {
 
     std::chrono::duration<double> duration{ 0 };
     for (int i = 0; i < nmatrices; i++) {
-        int n = 0, m = 0;
-        double** matr = readmatrix("matrices/" + std::to_string(i) + ".txt", &n, &m);
-        double* arr = readarr("values/" + std::to_string(i) + ".txt", &n);
+        LinearSystemContext* context = readmatrix("matrices/" + std::to_string(i) + ".txt");
+        readarr("values/" + std::to_string(i) + ".txt", context);
 
         std::chrono::time_point start = std::chrono::high_resolution_clock::now();
-        double* result = ld_solve(matr, n, arr);
+        context->solveLD();
         std::chrono::time_point end = std::chrono::high_resolution_clock::now();
-        writearr("fcfs/" + std::to_string(i) + ".txt", result, n);
+        writearr("fcfs/" + std::to_string(i) + ".txt", context, true);
 
         std::chrono::duration<double> localduration = end - start;
-        //std::cout << "Matrice " << i + 1 << " solved by " << localduration.count() << " seconds" << std::endl;
         duration += localduration;
-        delete matr, arr, result;
     }
     std::cout << "Total time is " << duration.count() << " seconds" << std::endl;
     return duration.count();
 }
 
-void compute_ld(double** matr, double* arr, int n, int i, int *completed, std::chrono::duration<double>* total)
-{
+// функция для решения матрицы в потоке
+DWORD WINAPI compute_ld(LPVOID ldParams) {
+    ComputeParam* param = (ComputeParam*)ldParams;
+
     std::chrono::time_point start = std::chrono::high_resolution_clock::now();
-    double* result = ld_solve(matr, n, arr);
+    param->context->solveLD();
     std::chrono::time_point end = std::chrono::high_resolution_clock::now();
-    writearr("guaranted/" + std::to_string(i) + ".txt", result, n);
     std::chrono::duration<double> localduration = end - start;
 
-    //std::cout << "Matrice " << i + 1 << " solved by " << localduration.count() << " seconds" << std::endl;
-    *total += localduration;
-    (*completed)++;
-
-    delete matr, arr, result;
+    *param->total += localduration;
+    param->finished[param->ordernum] = true;
+    return 0;
 }
 
-double guaranted(int nmatrices) {
+bool alltrue(bool* arr, int n) {
+    bool result = true;
+    for (int i = 0; i < n && result; i++) {
+        result &= arr[i];
+    }
+    return result;
+}
+
+// реализация планировщика гарантированного планирования
+void guaranted(int nmatrices) {
     if (!std::filesystem::exists("guaranted")) {
         std::filesystem::create_directory("guaranted");
     }
 
     std::cout << "Guaranted planning" << std::endl;
 
-    int threadcompleted = 0;
+    LinearSystemContext** linearSystems = new LinearSystemContext*[nmatrices];
+    ComputeParam** params = new ComputeParam*[nmatrices];
+
+    HANDLE* threads = new HANDLE[nmatrices];
+    DWORD* threadIds = new DWORD[nmatrices];
+    bool* finished = new bool[nmatrices];
+    for (int i = 0; i < nmatrices; i++) {
+        finished[i] = false;
+    }
+
     std::chrono::duration<double> total{ 0 };
     for (int i = 0; i < nmatrices; i++) {
-        int n = 0, m = 0;
-        double** matr = readmatrix("matrices/" + std::to_string(i) + ".txt", &n, &m);
-        double* arr = readarr("values/" + std::to_string(i) + ".txt", &n);
+        linearSystems[i] = readmatrix("matrices/" + std::to_string(i) + ".txt");
+        readarr("values/" + std::to_string(i) + ".txt", linearSystems[i]);
 
-        std::thread th = std::thread(compute_ld, matr, arr, n, i, &threadcompleted, &total);
-        th.detach();
+        params[i] = new ComputeParam();
+        params[i]->ordernum = i;
+        params[i]->finished = finished;
+        params[i]->context = linearSystems[i];
+        params[i]->total = &total;
+
+        threads[i] = CreateThread(NULL, 0, compute_ld, params[i], CREATE_SUSPENDED, &(threadIds[i]));
     }
-    while (threadcompleted < nmatrices);
+
+    int quant = 30;
+    int next = 0;
+    while (!alltrue(finished, nmatrices)) {
+        ResumeThread(threads[next]);
+        WaitForSingleObject(threads[next], quant);
+        SuspendThread(threads[next]);
+        if (alltrue(finished, nmatrices)) {
+            break;
+        }
+
+        if (next + 1 == nmatrices) {
+            next = 0;
+        }
+        while (finished[next]) {
+            next++;
+        }
+    }
+
+    for (int k = 0; k < nmatrices; k++) {
+        CloseHandle(threads[k]);
+    }
+
     std::cout << "Total time is " << total.count() << " seconds" << std::endl;
-    return total.count();
+
+    for (int i = 0; i < nmatrices; i++) {
+        writearr("guaranted/" + std::to_string(i) + ".txt", linearSystems[i], true);
+    }
+
+    delete[] finished;
+    delete[] threads;
+    delete[] threadIds;
+    delete[] params;
+    delete[] linearSystems;
 }
 
 int main() {
@@ -132,4 +140,5 @@ int main() {
     guaranted(n);
     std::cout << "Press enter to continue..." << std::endl;
     getchar();
+    return 0;
 }
